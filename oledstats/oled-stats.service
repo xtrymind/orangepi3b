@@ -1,0 +1,14 @@
+[Unit]
+Description=Orange Pi OLED Stats Display
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /root/oled_stats.py
+WorkingDirectory=/root
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
