@@ -7,7 +7,7 @@ import psutil
 import socket
 import fcntl
 import struct
-import os # Import the os module for file operations
+import os
 
 # --- Configuration ---
 # Revise this to match your I2C bus if necessary (e.g., port=1 for /dev/i2c-1)
@@ -26,8 +26,15 @@ except IOError:
     font = ImageFont.load_default()
     FONT_SIZE = 8 # Default font is smaller
 
-# Update interval in seconds
+# Update interval in seconds (how often stats are fetched and drawn)
 UPDATE_INTERVAL = 2
+
+# Rotation interval in seconds (how often Disk/IP display swaps)
+ROTATION_INTERVAL = 5
+
+# Global variables for rotation state
+last_rotation_time = time.time()
+display_disk_vs_ip_mode = 0 # 0 for Disk, 1 for IP
 
 # --- Helper Functions ---
 
@@ -53,14 +60,11 @@ def get_stats():
     mem_info = psutil.virtual_memory()
     disk_usage = psutil.disk_usage('/') # Root partition
 
-    # --- MODIFIED RAM USAGE CALCULATION ---
     # Convert bytes to megabytes
     mem_total_mb = mem_info.total / (1024 * 1024)
     mem_used_mb = mem_info.used / (1024 * 1024)
-    # mem_percent = mem_info.percent # We can still get this if needed, but display MB
-    # --- END MODIFIED ---
 
-    # --- MODIFIED: Read temperature from /etc/armbianmonitor/datasources/soctemp ---
+    # Read temperature from /etc/armbianmonitor/datasources/soctemp
     temp = "N/A"
     soctemp_path = "/etc/armbianmonitor/datasources/soctemp"
     if os.path.exists(soctemp_path):
@@ -77,7 +81,6 @@ def get_stats():
             print(f"Error reading soctemp: {e}")
     else:
         temp = "NoFile" # File not found
-    # --- END MODIFIED ---
 
     ip_address = get_ip_address('end1') # Change 'eth0' to your Wi-Fi interface like 'wlan0' if using Wi-Fi
     if ip_address == "N/A":
@@ -85,9 +88,8 @@ def get_stats():
 
     return {
         "cpu_percent": cpu_percent,
-        "mem_percent": mem_info.percent,
-        "mem_total_mb": mem_total_mb, # Added total RAM in MB
-        "mem_used_mb": mem_used_mb,   # Added used RAM in MB
+        "mem_total_mb": mem_total_mb,
+        "mem_used_mb": mem_used_mb,
         "disk_percent": disk_usage.percent,
         "ip_address": ip_address,
         "temperature": temp
@@ -96,6 +98,8 @@ def get_stats():
 # --- Main Logic ---
 
 def main():
+    global last_rotation_time, display_disk_vs_ip_mode # Declare as global to modify outside function
+
     print("Initializing OLED display...")
     try:
         serial = i2c(port=SERIAL_PORT, address=I2C_ADDRESS)
@@ -108,37 +112,38 @@ def main():
 
     print("Starting stats display loop. Press Ctrl+C to exit.")
     while True:
+        current_time = time.time()
+        # Check if it's time to rotate the display mode
+        if (current_time - last_rotation_time) >= ROTATION_INTERVAL:
+            display_disk_vs_ip_mode = 1 - display_disk_vs_ip_mode # Toggle between 0 (Disk) and 1 (IP)
+            last_rotation_time = current_time
+
         stats = get_stats()
 
+        # Calculate Y coordinates for 4 lines, using FONT_SIZE + 2 for spacing
+        line_height_spacing = FONT_SIZE + 2
+        y_cpu = 0
+        y_ram = y_cpu + line_height_spacing
+        y_tmp = y_ram + line_height_spacing
+        y_rotated_info = y_tmp + line_height_spacing # This is the 4th line
+
         with canvas(device) as draw:
-            # Clear previous content (canvas context manager handles this)
-            
             # Line 1: CPU Usage
-            draw.text((0, 0), f"CPU: {stats['cpu_percent']:.1f}%", font=font, fill="white")
+            draw.text((0, y_cpu), f"CPU: {stats['cpu_percent']:.1f}%", font=font, fill="white")
             
-            # Line 2: RAM Usage
-            #draw.text((0, FONT_SIZE + 2), f"RAM: {stats['mem_percent']:.1f}%", font=font, fill="white")
-            
-            # --- MODIFIED: RAM Usage in MB ---
             # Line 2: RAM Usage (Used/Total MB)
-            draw.text((0, FONT_SIZE + 2), f"RAM: {stats['mem_used_mb']:.0f}/{stats['mem_total_mb']:.0f}MB", font=font, fill="white")
-            # --- END MODIFIED ---
+            draw.text((0, y_ram), f"RAM: {stats['mem_used_mb']:.0f}/{stats['mem_total_mb']:.0f}MB", font=font, fill="white")
             
+            # Line 3: Temperature
+            draw.text((0, y_tmp), f"TMP: {stats['temperature']}", font=font, fill="white")
 
-            # Line 3: Disk Usage
-            #draw.text((0, (FONT_SIZE + 2) * 2), f"DSK: {stats['disk_percent']:.1f}%", font=font, fill="white")
-            
-            # Line 4: Temperature
-            draw.text((0, (FONT_SIZE + 2) * 2), f"TMP: {stats['temperature']}", font=font, fill="white")
+            # Line 4: Rotating Disk Usage / IP Address
+            if display_disk_vs_ip_mode == 0: # Display Disk Usage
+                draw.text((0, y_rotated_info), f"DSK: {stats['disk_percent']:.1f}%", font=font, fill="white")
+            else: # Display IP Address
+                draw.text((0, y_rotated_info), f"IP: {stats['ip_address']}", font=font, fill="white")
 
-            # Line 5: IP Address
-            # Adjust position based on FONT_SIZE and display height (64 pixels)
-            # You might need to make font smaller or remove a line if it doesn't fit
-            # For 128x64 display, 5 lines of 12pt font might be tight, especially with padding.
-            # (FONT_SIZE + 2) * 4 should be around 56 pixels, leaving some space.
-            draw.text((0, (FONT_SIZE + 2) * 3), f"IP: {stats['ip_address']}", font=font, fill="white")
-
-        time.sleep(UPDATE_INTERVAL)
+        time.sleep(UPDATE_INTERVAL) # This controls how often the display refreshes with new stats
 
 if __name__ == "__main__":
     try:
